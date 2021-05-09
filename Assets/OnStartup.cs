@@ -6,18 +6,18 @@ using System.Linq;
 
 public class OnStartup : MonoBehaviour
 {
-    public PolygonCollider2D hole2D;
     public PolygonCollider2D ground2D;
-    public MeshCollider meshCollider;
-    public GameObject ground;
+    MeshCollider meshCollider;
     Mesh mesh;
     Camera camera;
-    Vector3 hitPos;
     Path currentPath; 
     List<Path> paths;
     Color color;
     Color currentPathColor;
     bool pathHasChanged;
+    BoxCollider boxCollider;
+    LineRenderer currentLine;
+    List<LineRenderer> existingLines;
     class Path {
         public Path () {
             xMin = float.MaxValue;
@@ -25,13 +25,16 @@ public class OnStartup : MonoBehaviour
             xMax = float.MinValue;
             yMax = float.MinValue;
             path = new List<Vector2>();
+            relativePath = new List<Vector2>();
             indexToIntersectionMap = new Dictionary<int, List<Intersection>>();
         }
         // Bounding Box of the path
         public float xMin, yMin;
         public float xMax, yMax;
         // the actual path
-        public List<Vector2> path; 
+        public List<Vector2> path;
+        // the relative path for ground 2D, i.e. we need to translate the current coordinates to match with ground2D
+        public List<Vector2> relativePath; 
         public float constantY;
         public Dictionary<int, List<Intersection>> indexToIntersectionMap;
     }
@@ -53,48 +56,82 @@ public class OnStartup : MonoBehaviour
 
     private void Start() {
         camera = Camera.main;
-        hitPos = -1 * Vector3.one;
         currentPath = new Path();
         paths = new List<Path>();
         color = new Color(0.0f, 0.0f, 1.0f);
         currentPathColor = new Color(1.0f, 0.0f, 0.0f);
         pathHasChanged = true;
+        meshCollider = GetComponent<MeshCollider> (); 
+        boxCollider = GetComponent<BoxCollider> ();
+        currentLine = GetComponent<LineRenderer>();
+        currentLine.useWorldSpace = true;    
+        existingLines = new List<LineRenderer>();
     }
+
+    void RotateMesh (Mesh mesh1) {
+        Vector3[] meshVertices = mesh1.vertices;
+        for (int i = 0; i < meshVertices.Length; i++) {
+            meshVertices[i] = Quaternion.Euler(90, 0, 0) * meshVertices[i];
+        } 
+        mesh1.vertices = meshVertices;
+    }
+
 
     // Start is called before the first frame update
     private void FixedUpdate()
     {
-        // update the mesh collider if a new path has been added
         if (pathHasChanged) {
-            pathHasChanged = false;
-                
+            // update the mesh collider if a new path has been added            
             ground2D.pathCount = paths.Count + 1;
             for (int i = 0; i < paths.Count; i++){
-                ground2D.SetPath(i + 1, paths[i].path);
+                ground2D.SetPath(i + 1, paths[i].relativePath);
             }
             if (mesh != null) Destroy(mesh);
             mesh = ground2D.CreateMesh(true, true);
+            RotateMesh(mesh);
             meshCollider.sharedMesh = mesh;
+
+            pathHasChanged = false;
+
+            // instantitate new Line Renderers on need basis
+            if (paths.Count > existingLines.Count) {
+                int newLines = paths.Count - existingLines.Count;
+                for (int i = 0; i < newLines; i++) {
+                    LineRenderer line = new GameObject().AddComponent<LineRenderer> ();
+                    line.transform.parent = transform;
+                    existingLines.Add(line);
+                } 
+            }
+
+            // reinitialize all lines
+            foreach (LineRenderer line in existingLines) {
+                line.positionCount = 0;
+            }
+
+            // draw the existing paths
+            for (int i = 0; i < paths.Count; i++) {
+                Path path = paths[i];
+                LineRenderer line = existingLines[i];
+                line.positionCount = path.path.Count;
+                line.useWorldSpace = false;    
+                line.material.color = Color.blue;
+                line.startWidth = 0.04f;
+                line.endWidth = 0.04f;
+
+                for (int j = 0; j < path.path.Count; j++) {
+                    Vector3 pt = (new Vector3(path.path[j].x, path.constantY + 0.1f, path.path[j].y));
+                    line.SetPosition(j, pt);
+                }
+            } 
         }
 
+        currentLine.positionCount = currentPath.path.Count;
         // draw the currently being created path
         if (currentPath != null && currentPath.path.Count > 0) {
-            for (int i = 1; i < currentPath.path.Count; i++) {
-                Vector2 p1 = currentPath.path[i - 1];
-                Vector2 p2 = currentPath.path[i];
-                Debug.DrawLine(new Vector3(p1.x, currentPath.constantY, p1.y), new Vector3(p2.x, currentPath.constantY, p2.y), currentPathColor);
+            for (int i = 0; i < currentPath.path.Count; i++) {
+                currentLine.SetPosition(i, new Vector3(currentPath.path[i].x, currentPath.constantY + 0.1f, currentPath.path[i].y));
             }
-        }
-
-        // draw the existing paths
-        foreach (Path path in paths) {
-            for (int i = 1; i < path.path.Count; i++) {
-                Vector3 p1 = new Vector3(path.path[i - 1].x, path.constantY, path.path[i - 1].y);
-                Vector3 p2 = new Vector3(path.path[i].x, path.constantY, path.path[i].y);
-                Debug.DrawLine(p1, p2, color);
-            }
-        } 
-        
+        }        
     }
 
     void OnMouseUp() {
@@ -118,18 +155,33 @@ public class OnStartup : MonoBehaviour
         currentPath = new Path();
     }
 
+   // translate disk relative point to 2d Polygon collider cooridinates
+    Vector2 GetRelativePoint (Vector3 point) {
+        return new Vector2 (point.x - transform.position.x, point.z - transform.position.z);
+    }
+
+    Vector2 GetRelativePoint (Vector2 point) {
+        return new Vector2 (point.x - transform.position.x, point.y - transform.position.z);
+    }
+
     void OnMouseDrag(){
         Ray ray = camera.ScreenPointToRay(Input.mousePosition);
         RaycastHit hit;
         int n = currentPath.path.Count;
+        Vector3 hitPos = -1 * Vector3.one;
         if (Physics.Raycast(ray, out hit)){
+            if (hit.collider != boxCollider) 
+                return;
             hitPos = hit.point;
         }
         Vector2 currentPoint = new Vector2(hitPos.x, hitPos.z);
+        Vector2 relativePoint = GetRelativePoint(hitPos);
         // its the start point always record it
         if (n == 0) {
             currentPath.constantY = hitPos.y;
             currentPath.path.Add(currentPoint);
+            currentPath.relativePath.Add(relativePoint);
+
         }
         // do not record the point if the distance between the previous point and the current point is less than 0.1f
         // we are doing this to avoid unnecessary points in our path, which can add to unnecessary processing in our mesh collider 
@@ -143,6 +195,7 @@ public class OnStartup : MonoBehaviour
             }
 
             currentPath.path.Add(currentPoint);
+            currentPath.relativePath.Add(relativePoint);
 
             // update the paths AABB
             currentPath.xMin = Math.Min(currentPath.xMin, currentPoint.x);
@@ -217,6 +270,7 @@ public class OnStartup : MonoBehaviour
                         continue;
                     Debug.Log("Starting a new path!!");
                     Path mergedPath = new Path();
+                    mergedPath.constantY = currentIntersection.path.constantY;
                     mergedPathList.Add(mergedPath);
                     int mC = 0;
                     while(true) {
@@ -235,6 +289,7 @@ public class OnStartup : MonoBehaviour
                             Debug.Log("NPR :" + currentIntersection);
                         }
                         mergedPath.path.Add(currentIntersection.point);
+                        mergedPath.relativePath.Add(GetRelativePoint (currentIntersection.point));
                         int index = 0;
                         // if the paths are same then switch to new path
                         if (curPath == currentIntersection.path) {
@@ -340,6 +395,7 @@ public class OnStartup : MonoBehaviour
                                 continue;
                             }
                             mergedPath.path.Add(rightPoint);
+                            mergedPath.relativePath.Add(GetRelativePoint (rightPoint));
                             j = mod(rightIndex + 1, curPath.path.Count);
                         }
                         else {
@@ -350,12 +406,14 @@ public class OnStartup : MonoBehaviour
                             }
                             dir = -1;
                             mergedPath.path.Add(leftPoint);
+                            mergedPath.relativePath.Add(GetRelativePoint (leftPoint));
                             j = mod(leftIndex - 1, curPath.path.Count);
                         }
                         Debug.Log ("GOING SOLO!! with J : " + j + " dir : " + dir);
                         int k = j;
                         while (!curPath.indexToIntersectionMap.ContainsKey(j)) {
                             mergedPath.path.Add(curPath.path[j]);
+                            mergedPath.relativePath.Add(GetRelativePoint (curPath.path[j]));
                             j = mod(j + dir, curPath.path.Count);
                             if (k == j) {
                                 Debug.Log("Stuck in an infinite loop. Kind of sucks here : J : " + j + " key collection : " + curPath.indexToIntersectionMap.Keys);
@@ -379,6 +437,7 @@ public class OnStartup : MonoBehaviour
                     }
                     // add the final point.
                     mergedPath.path.Add(currentIntersection.point);
+                    mergedPath.relativePath.Add(GetRelativePoint (currentIntersection.point));
                     InitializeAABBForPath(mergedPath);
                 }
             }
