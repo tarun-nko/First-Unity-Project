@@ -7,6 +7,7 @@ using System.Linq;
 public class OnStartup : MonoBehaviour
 {
     public PolygonCollider2D ground2D;
+    public Material material;
     MeshCollider meshCollider;
     Mesh mesh;
     Camera camera;
@@ -18,41 +19,6 @@ public class OnStartup : MonoBehaviour
     BoxCollider boxCollider;
     LineRenderer currentLine;
     List<LineRenderer> existingLines;
-    class Path {
-        public Path () {
-            xMin = float.MaxValue;
-            yMin = float.MaxValue;
-            xMax = float.MinValue;
-            yMax = float.MinValue;
-            path = new List<Vector2>();
-            relativePath = new List<Vector2>();
-            indexToIntersectionMap = new Dictionary<int, List<Intersection>>();
-        }
-        // Bounding Box of the path
-        public float xMin, yMin;
-        public float xMax, yMax;
-        // the actual path
-        public List<Vector2> path;
-        // the relative path for ground 2D, i.e. we need to translate the current coordinates to match with ground2D
-        public List<Vector2> relativePath; 
-        public float constantY;
-        public Dictionary<int, List<Intersection>> indexToIntersectionMap;
-    }
-
-    class Intersection {
-        public Intersection(float x, float y) {
-            point = new Vector2(x, y);
-        }
-        // the intersection point
-        public Vector2 point;
-        // the references of the existing path with which the new path has intersected 
-        public Path path;
-        // the location of the start point of the intersecting line segments in their corresponding paths
-        public int oldPathI, newPathI;
-        public override string ToString() {
-            return "Point : " + point.x + " : " + point.y + ", intersecting Path length : " + path.path.Count + ", Ref Old Path I : " + oldPathI + ", Ref New Path I : " + newPathI;
-        }
-    }
 
     private void Start() {
         camera = Camera.main;
@@ -83,7 +49,7 @@ public class OnStartup : MonoBehaviour
         if (pathHasChanged) {
             // update the mesh collider if a new path has been added            
             ground2D.pathCount = paths.Count + 1;
-            for (int i = 0; i < paths.Count; i++){
+            for (int i = 0; i < paths.Count; i++) {
                 ground2D.SetPath(i + 1, paths[i].relativePath);
             }
             if (mesh != null) Destroy(mesh);
@@ -93,35 +59,47 @@ public class OnStartup : MonoBehaviour
 
             pathHasChanged = false;
 
-            // instantitate new Line Renderers on need basis
-            if (paths.Count > existingLines.Count) {
-                int newLines = paths.Count - existingLines.Count;
-                for (int i = 0; i < newLines; i++) {
-                    LineRenderer line = new GameObject().AddComponent<LineRenderer> ();
-                    line.transform.parent = transform;
-                    existingLines.Add(line);
-                } 
-            }
-
-            // reinitialize all lines
-            foreach (LineRenderer line in existingLines) {
-                line.positionCount = 0;
-            }
-
             // draw the existing paths
             for (int i = 0; i < paths.Count; i++) {
                 Path path = paths[i];
-                LineRenderer line = existingLines[i];
-                line.positionCount = path.path.Count;
-                line.useWorldSpace = false;    
-                line.material.color = Color.blue;
-                line.startWidth = 0.04f;
-                line.endWidth = 0.04f;
+            
+                if (path.gameObject == null) {
+                    for (int i1 = path.path.Count - 2; i1 >= 0; i1--) {
+                        if (path.path[i1].Equals(path.path[i1 + 1])){
+                            path.path.RemoveAt(i1 + 1);
+                            Debug.Log("Removing same at " + (i1 + 1) + " : " + path.path[i1]);
+                        }
+                    }
+                    List<int> indices = Triangulator.Triangulate(new List<Vector2>(path.path));
+                    
+                    // convert vertices from 2d to 3d
+                    List<Vector3> vertices = new List<Vector3>();
 
-                for (int j = 0; j < path.path.Count; j++) {
-                    Vector3 pt = (new Vector3(path.path[j].x, path.constantY + 0.1f, path.path[j].y));
-                    line.SetPosition(j, pt);
+                    for (int j = 0; j < path.path.Count; j++) {
+                        vertices.Add(new Vector3(path.path[j].x, path.constantY + 0.1f, path.path[j].y));
+                    }
+                    List<int> indices1 = HelperFunctions.Make3D(vertices, 0.45f);
+                    // create the bottom half of the 3d polygon
+                    List<int> indices2 = new List<int>(indices);
+                    for (int i1 = 0; i1 < indices2.Count; i1++){
+                        indices2[i1] += path.path.Count;
+                    }
+                    indices2.Reverse();
+                    indices.AddRange(indices1);
+                    indices.AddRange(indices2);
+                    
+                    Mesh msh = new Mesh();
+                    msh.vertices = vertices.ToArray();
+                    msh.triangles = indices.ToArray();
+                    msh.RecalculateNormals();
+                    msh.RecalculateBounds();
+                    path.gameObject = new GameObject("path#" + i, typeof(MeshFilter), typeof(MeshRenderer));
+                    // Set up game object with mesh;
+                    path.gameObject.GetComponent<MeshFilter>().mesh = msh;
+                    path.gameObject.GetComponent<MeshRenderer>().material = material;
+                    path.gameObject.transform.parent = transform;
                 }
+                
             } 
         }
 
@@ -189,7 +167,7 @@ public class OnStartup : MonoBehaviour
         // == checks for approx equals in Vector2
         else if (!(currentPoint == currentPath.path[n - 1]) && Vector2.Distance(currentPoint, currentPath.path[n - 1]) > 0.15f) {
             // if there's any self intersection cancel the path
-            if (CheckForSelfIntersection (currentPath.path[n - 1], currentPoint, currentPath)) {
+            if (HelperFunctions.CheckForSelfIntersection (currentPath.path[n - 1], currentPoint, currentPath)) {
                 ResetCurrentPath();
                 return;
             }
@@ -272,12 +250,7 @@ public class OnStartup : MonoBehaviour
                     Path mergedPath = new Path();
                     mergedPath.constantY = currentIntersection.path.constantY;
                     mergedPathList.Add(mergedPath);
-                    int mC = 0;
                     while(true) {
-                        mC++;
-                        if (mC > 5000) {
-                            Debug.Log("Stuck in an infinite loop dawg. It aint pretty up here." + currentIntersection.ToString());
-                        }
                         // break if we encounter the same intersection again. it means we have completed a loop.
                         if (hasIntersectionBeenCovered.Contains (currentIntersection))
                             break;
@@ -377,8 +350,8 @@ public class OnStartup : MonoBehaviour
                         adjLeft = (adjLeft + currentIntersection.point) * 0.5f;
                         adjRight = (adjRight + currentIntersection.point) * 0.5f;
 
-                        bool isLeftPointInside = IsInsidePolygon(otherPath, adjLeft);
-                        bool isRightPointInside = IsInsidePolygon(otherPath, adjRight);
+                        bool isLeftPointInside = HelperFunctions.IsInsidePolygon(otherPath, adjLeft);
+                        bool isRightPointInside = HelperFunctions.IsInsidePolygon(otherPath, adjRight);
                         
                         int dir = 1;
                         int j;
@@ -410,15 +383,10 @@ public class OnStartup : MonoBehaviour
                             j = mod(leftIndex - 1, curPath.path.Count);
                         }
                         Debug.Log ("GOING SOLO!! with J : " + j + " dir : " + dir);
-                        int k = j;
                         while (!curPath.indexToIntersectionMap.ContainsKey(j)) {
                             mergedPath.path.Add(curPath.path[j]);
                             mergedPath.relativePath.Add(GetRelativePoint (curPath.path[j]));
                             j = mod(j + dir, curPath.path.Count);
-                            if (k == j) {
-                                Debug.Log("Stuck in an infinite loop. Kind of sucks here : J : " + j + " key collection : " + curPath.indexToIntersectionMap.Keys);
-                                throw new Exception("THIS AINT WORKING DAWG!!");
-                            }
                         }
 
                         // if there are multiple intersections with the same line segment, then find the closest intersection to the current point.
@@ -438,7 +406,7 @@ public class OnStartup : MonoBehaviour
                     // add the final point.
                     mergedPath.path.Add(currentIntersection.point);
                     mergedPath.relativePath.Add(GetRelativePoint (currentIntersection.point));
-                    InitializeAABBForPath(mergedPath);
+                    HelperFunctions.InitializeAABBForPath(mergedPath);
                 }
             }
 
@@ -450,91 +418,18 @@ public class OnStartup : MonoBehaviour
                 }
             }
             foreach (Path p in pathsToBeRemoved) {
-                paths.Remove(p);
+                Destroy(p.gameObject);
+                paths.Remove(p); 
             }
             
             paths.AddRange(mergedPathList);
         }
     }
 
-    void InitializeAABBForPath (Path path) {
-        foreach(Vector2 point in path.path){
-            path.xMin = Math.Min(path.xMin, point.x);
-            path.yMin = Math.Min(path.yMin, point.y);
-            path.xMax = Math.Max(path.xMax, point.x);
-            path.yMax = Math.Max(path.yMax, point.y);
-        }
-    }
-
-    bool IsInsidePolygon (Vector3 point) {
-        int count = 0;
-        Vector2 point2D = new Vector2(point.x, point.z);
-        // we have a ray starting from point2D and extending towards positive x axis parallely
-        // we want to check how many times this ray intersects with other paths
-        // if its odd, then we are inside the polygon, otherwise we are outside  
-        foreach (Path path in paths) {
-            // does the ray intersect with bounding box of the path
-            if (path.xMax > point2D.x && path.yMin < point2D.y && path.yMax > point2D.y) {
-                // check for intersection with all the edges of the path
-                bool flag = false;
-                for (int i = 1; i < path.path.Count; i++){
-                    // if (i == path.path.Count - 1 && skipEnd) {
-                    //     continue;
-                    // }
-                    Vector2 point1 = path.path[i - 1];
-                    Vector2 point2 = path.path[i];
-                    if (point1.x > point2D.x || point2.x > point2D.x) {
-                        
-                        if (Mathf.Approximately(point1.y, point2D.y) || Mathf.Approximately(point2.y, point2D.y)) {
-                            if (!flag) {
-                                count++;
-                                //Debug.Log("Alligned Original ->" + point2D.x +"," +point2D.y + " Collisions : " + point1.x+","+point1.y + " & " + point2.x + "," + point2.y);
-
-                            }
-                            flag = true;
-                        }
-                        else if ((point1.y < point2D.y && point2.y > point2D.y) || (point1.y > point2D.y && point2.y < point2D.y)) 
-                        {
-                            count++;
-                            //Debug.Log("Original ->" + point2D.x +"," +point2D.y + " Collisions : " + point1.x+","+point1.y + " & " + point2.x + "," + point2.y);
-                        }
-
-                    }
-                }
-            }
-        }
-        return count % 2 == 1;
-    }
     // Axis Alligned Bounding Box
     bool IsInsideAABB (Path path, Vector2 point) {
         return path.xMin < point.x && path.yMin < point.y && path.xMax > point.x && path.yMax > point.y;
     } 
-
-    // draw a line segment from the bounding box minimum point to the point to be checked
-    // if the number of intersections is even, it means point is outside, else its inside
-    bool IsInsidePolygon(Path path, Vector2 p1) {
-        //Vector2 p2 = new Vector2(Mathf.Approximately(path.xMin, p1.x) ? path.xMax : path.xMin, Mathf.Approximately(p1.y, path.yMin) ? path.yMax : path.yMin);
-        Vector2 p2 = new Vector2(path.xMin, path.yMin);
-        int count = 0;
-        for (int i = 1; i < path.path.Count; i++) {
-            Vector2 p3 = path.path[i - 1];
-            Vector2 p4 = path.path[i];
-            count += AreLinesIntersecting(p1, p2, p3, p4) != null ? 1 : 0;
-        }
-        return count % 2 == 1;
-    }
-
-    bool IsInsidePolygon1(Path path, Vector2 p1) {
-        //Vector2 p2 = new Vector2(Mathf.Approximately(path.xMin, p1.x) ? path.xMax : path.xMin, Mathf.Approximately(p1.y, path.yMin) ? path.yMax : path.yMin);
-        Vector2 p2 = new Vector2(path.xMax, path.yMax);
-        int count = 0;
-        for (int i = 1; i < path.path.Count; i++) {
-            Vector2 p3 = path.path[i - 1];
-            Vector2 p4 = path.path[i];
-            count += AreLinesIntersecting(p1, p2, p3, p4) != null ? 1 : 0;
-        }
-        return count % 2 == 1;
-    }
 
 
     List<Intersection> DoesLineIntersectWithAnyPath (Vector2 start, Vector2 end) {
@@ -545,7 +440,7 @@ public class OnStartup : MonoBehaviour
                     Vector2 point1 = path.path[i - 1];
                     Vector2 point2 = path.path[i];
 
-                    Intersection intersectionPoint = AreLinesIntersecting (start, end, point1, point2);
+                    Intersection intersectionPoint = HelperFunctions.AreLinesIntersecting (start, end, point1, point2);
                     if (intersectionPoint != null) {
                         intersectionPoint.path = path;
                         // if intersection point overlaps with old path's vertices or new path's vertices, then dont look for further intersections 
@@ -618,15 +513,6 @@ public class OnStartup : MonoBehaviour
         return intersectionList;
     }
 
-    bool CheckForSelfIntersection (Vector2 start, Vector2 end, Path path) {
-        for (int i = 1; i < path.path.Count - 1; i++) {
-            Vector2 point1 = path.path[i - 1];
-            Vector2 point2 = path.path[i];
-            if (AreLinesIntersecting(point1, point2, start, end) != null)
-                return true; 
-        }
-        return false;
-    }
 
     bool CheckIfPointAlreadyPresent (Path path, int index, Vector2 intersectionPoint) {
         if (path.indexToIntersectionMap.ContainsKey(index)) {
@@ -641,48 +527,7 @@ public class OnStartup : MonoBehaviour
         return false;
     }
 
-    Intersection AreLinesIntersecting(Vector2 l1_p1, Vector2 l1_p2, Vector2 l2_p1, Vector2 l2_p2)
-    {
-        //To avoid floating point precision issues we can add a small value
-        float epsilon = 0.00001f;
 
-        Intersection intersectionPoint = null;
-        float denominator = (l2_p2.y - l2_p1.y) * (l1_p2.x - l1_p1.x) - (l2_p2.x - l2_p1.x) * (l1_p2.y - l1_p1.y);
-
-        //Make sure the denominator is > 0, if not the lines are parallel
-        if (!Mathf.Approximately(denominator, 0.0f))
-        {
-            float u_a = ((l2_p2.x - l2_p1.x) * (l1_p1.y - l2_p1.y) - (l2_p2.y - l2_p1.y) * (l1_p1.x - l2_p1.x)) / denominator;
-            float u_b = ((l1_p2.x - l1_p1.x) * (l1_p1.y - l2_p1.y) - (l1_p2.y - l1_p1.y) * (l1_p1.x - l2_p1.x)) / denominator;
-            //Debug.Log("I am here : " + l1_p1.ToString() + ", " + l1_p2.ToString() + ", " + l2_p1.ToString() + ", " + l2_p2.ToString());
-            //Is intersecting if u_a and u_b are between 0 and 1 or exactly 0 or 1
-            bool aEquals0 = Mathf.Approximately(u_a, 0.0f);
-            bool aEquals1 = Mathf.Approximately(u_a, 1.0f);
-            bool bEquals0 = Mathf.Approximately(u_b, 0.0f);
-            bool bEquals1 = Mathf.Approximately(u_b, 1.0f);
-            bool aBetween01 = u_a > 0.0f && u_a < 1.0f;
-            bool bBetween01 = u_b > 0.0f && u_b < 1.0f;
-            if ((aEquals0 || aEquals1 || aBetween01) && (bEquals0 || bEquals1 || bBetween01)) {
-                intersectionPoint = new Intersection(l1_p1.x + u_a * (l1_p2.x - l1_p1.x), l1_p1.y + u_a * (l1_p2.y - l1_p1.y));
-            }
-            //  if (u_a >= 0f + epsilon && u_a <= 1f - epsilon && u_b >= 0f + epsilon && u_b <= 1f - epsilon)
-            // {
-            //     intersectionPoint = new Intersection(l1_p1.x + u_a * (l1_p2.x - l1_p1.x), l1_p1.y + u_a * (l1_p2.y - l1_p1.y));
-            // }
-        }
-
-        return intersectionPoint;
-    }
-
-    bool ArePointsOnTheSameSideOfLine(Vector2 pt1, Vector2 pt2, Vector2 linePt1, Vector2 linePt2) {
-        // perform cross product between AB and AC, do the same for AB and AD, if they are facing the same
-        // direction then they are on same side, otherwise opposite direction
-        Vector3 AB = linePt1 - linePt2;
-        Vector3 AC = linePt1 - pt1;
-        Vector3 AD = linePt1 - pt2;
-        return Vector3.Dot(Vector3.Normalize(Vector3.Cross(AB, AC)), Vector3.Normalize(Vector3.Cross(AB, AD))) >= 0;
-        
-    }
 
     int mod (int val, int size) {
         return ((val) % size + size) % size; 
