@@ -45,6 +45,7 @@ public class AnimationTransition : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.LeftShift)) {
             if (figureAnimator.GetCurrentAnimatorStateInfo(0).IsName("New Animation")) {
                 Debug.Log("I am here");
+                cameraAnimator.SetTrigger("action");
                 figureRb.useGravity = true;
                 figureRb.constraints =  RigidbodyConstraints.FreezeRotationZ | RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationY;
             }            
