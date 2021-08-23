@@ -1,6 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
-
+using System;
 // Implementation of Ear Clipping Algorithm
 // Runtime : O(n^2)
 
@@ -19,10 +19,11 @@ public class Triangulator
         }
     }
 
-    public static List<int> Triangulate (List<Vector2> path) {
+    public static Tuple<List<int>, bool> Triangulate (List<Vector2> path) {
         if (path != null && path.Count != 0) {
             path.RemoveAt(path.Count - 1);
         }
+         
         List<int> indices = new List<int> ();
         LinkedList<Vertex> ll = new LinkedList<Vertex> ();
         // create a Vertex doubly linked list, wish .Net had a circular linked list as well, alas
@@ -68,7 +69,7 @@ public class Triangulator
                     // remove the ear
                     ll.Remove(node);
                     // add to the indices in clockwise winding order, since thats front facing in Unity
-                    if (HelperFunctions.IsTriangleOrientedClockwise(prevNode.Value.position, node.Value.position, nextNode.Value.position)){
+                    if (isPathClockwise){//HelperFunctions.IsTriangleOrientedClockwise(prevNode.Value.position, node.Value.position, nextNode.Value.position)){
                         indices.Add(prevNode.Value.index);
                         indices.Add(node.Value.index);
                         indices.Add(nextNode.Value.index);
@@ -87,7 +88,7 @@ public class Triangulator
                 node = node.Next == null ? ll.First : node.Next;
             }
         }
-        return indices;
+        return Tuple.Create(indices, isPathClockwise);
     }
      
     // private float Area () {

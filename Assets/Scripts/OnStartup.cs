@@ -7,7 +7,9 @@ using System.Linq;
 public class OnStartup : MonoBehaviour
 {
     public PolygonCollider2D ground2D;
-    public Material material;
+    public Material surfaceMaterial;
+    public Material edgeMaterial;
+    Material[] holeMaterials = new Material[2];
     MeshCollider meshCollider;
     Mesh mesh;
     Camera camera;
@@ -32,6 +34,8 @@ public class OnStartup : MonoBehaviour
         currentLine = GetComponent<LineRenderer>();
         currentLine.useWorldSpace = true;    
         existingLines = new List<LineRenderer>();
+        holeMaterials[0] = surfaceMaterial;
+        holeMaterials[1] = edgeMaterial;
     }
 
     void RotateMesh (Mesh mesh1) {
@@ -70,36 +74,36 @@ public class OnStartup : MonoBehaviour
                             Debug.Log("Removing same at " + (i1 + 1) + " : " + path.path[i1]);
                         }
                     }
-                    List<int> indices = Triangulator.Triangulate(new List<Vector2>(path.path));
-                    
+                    Tuple<List<int>, bool> res = Triangulator.Triangulate(new List<Vector2>(path.path));
+                    List<int> indices = res.Item1;
+                    bool isPathClockwise = res.Item2;
                     // convert vertices from 2d to 3d
                     List<Vector3> vertices = new List<Vector3>();
 
                     for (int j = 0; j < path.path.Count; j++) {
-                        vertices.Add(new Vector3(path.path[j].x, path.constantY + 0.1f, path.path[j].y));
+                        vertices.Add(new Vector3(path.path[j].x, path.constantY + 0.01f, path.path[j].y));
                     }
-                    List<int> indices1 = HelperFunctions.Make3D(vertices, 0.45f);
-                    // create the bottom half of the 3d polygon
-                    List<int> indices2 = new List<int>(indices);
-                    for (int i1 = 0; i1 < indices2.Count; i1++){
-                        indices2[i1] += path.path.Count;
+                    // create the thickness for the hole, this will not be part of the stencil buffer write, hence will be visible 
+                    List<int> indices1 = HelperFunctions.Make3D(vertices, 0.135f);
+                    if (!isPathClockwise) {
+                        indices1.Reverse();
                     }
-                    indices2.Reverse();
-                    indices.AddRange(indices1);
-                    indices.AddRange(indices2);
                     
                     Mesh msh = new Mesh();
+                    msh.subMeshCount = 2;
                     msh.vertices = vertices.ToArray();
-                    msh.triangles = indices.ToArray();
+                    
+                    msh.SetTriangles(indices, 0);
+                    msh.SetTriangles(indices1, 1);
+
                     msh.RecalculateNormals();
                     msh.RecalculateBounds();
-                    path.gameObject = new GameObject("path#" + i, typeof(MeshFilter), typeof(MeshRenderer));
+                    path.gameObject = new GameObject("path#" + System.Guid.NewGuid(), typeof(MeshFilter), typeof(MeshRenderer));
                     // Set up game object with mesh;
                     path.gameObject.GetComponent<MeshFilter>().mesh = msh;
-                    path.gameObject.GetComponent<MeshRenderer>().material = material;
+                    path.gameObject.GetComponent<MeshRenderer>().materials = holeMaterials;
                     path.gameObject.transform.parent = transform;
                 }
-                
             } 
         }
 

@@ -203,7 +203,7 @@ public class HelperFunctions {
         // join them by creating indices
         List<int> indices = new List<int>();
         int MOD = vertices.Count;
-        for (int i = 0; i < n; i++){
+        for (int i = 0; i < n; i++) {
             indices.Add(i);
             indices.Add((i + n + 1) % MOD);
             indices.Add((i + n) % MOD);
